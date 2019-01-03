@@ -205,7 +205,7 @@ function Invoke-DBOQuery {
                 }
             }
             catch {
-                Stop-PSFFunction -Message 'File not found' -Exception $_ -EnableException $true
+                Stop-PSFFunction -Message 'File not found' -ErrorRecord $_ -EnableException $true
             }
             $queryText = $fileObjects | Get-Content -Raw
         }
@@ -223,7 +223,7 @@ function Invoke-DBOQuery {
                 if ($PSCmdlet.ShouldProcess("Executing query $qCount", $config.SqlInstance)) {
                     foreach ($splitQuery in $dbUpConnection.SplitScriptIntoCommands($queryItem)) {
                         $dt = [System.Data.DataTable]::new()
-                        $rows = $dbUpConnection.ExecuteCommandsWithManagedConnection( [Func[Func[Data.IDbCommand], pscustomobject]] {
+                        $rows = $dbUpConnection.ExecuteCommandsWithManagedConnection( [Func[Func[Data.IDbCommand], System.Object]] {
                                 Param (
                                     $dbCommandFactory
                                 )
@@ -240,21 +240,34 @@ function Invoke-DBOQuery {
                                 # Initiating the AdHocSqlRunner
                                 $sqlRunner = [DbUp.Helpers.AdHocSqlRunner]::new($dbCommandFactory, $dbUpSqlParser, $config.Schema)
                                 return $sqlRunner.ExecuteReader($splitQuery, $parameterList)
-                            })
+                            }) 
                         $rowCount = ($rows | Measure-Object).Count
                         if ($rowCount -gt 0) {
-                            $keys = switch ($rowCount) {
+                            $originalKeys = switch ($rowCount) {
                                 1 { $rows.Keys }
                                 default { $rows[0].Keys }
+                            }
+                            $noNameColumnCounter = 1
+                            $keys = @()
+                            foreach ($key in $originalKeys) {
+                                $keys += switch ($key) {
+                                    $null { "Column$noNameColumnCounter"; break }
+                                    '' { "Column$noNameColumnCounter"; break }
+                                    default { $_ }
+                                }
+                                $noNameColumnCounter++
                             }
                             foreach ($column in $keys) {
                                 $null = $dt.Columns.Add($column)
                             }
                             foreach ($row in $rows) {
                                 $dr = $dt.NewRow()
-                                foreach ($col in $row.Keys) {
-                                    $dr[$col] = $row[$col]
+                                $rowEnum = $row.GetEnumerator()
+                                foreach ($col in $keys) {
+                                    $null = $rowEnum.MoveNext()
+                                    $dr[$col] = $rowEnum.Current.Value
                                 }
+                                $rowEnum.Dispose()
                                 $null = $dt.Rows.Add($dr);
                             }
                         }
